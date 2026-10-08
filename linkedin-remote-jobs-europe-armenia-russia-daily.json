@@ -1,0 +1,787 @@
+{
+  "name": "LinkedIn Remote Jobs — Europe/Armenia/Russia (Daily)",
+  "description": null,
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "hours"
+            }
+          ]
+        }
+      },
+      "id": "9c4d7700-8c09-441c-9500-d5523ce4c15f",
+      "name": "⏰ Every Day",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.1,
+      "position": [
+        0,
+        0
+      ]
+    },
+    {
+      "parameters": {},
+      "id": "97ce776f-4b3f-4ef5-958b-70db36d8971e",
+      "name": "🧪 Manual Trigger (Test Reset)",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [
+        0,
+        432
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const staticData = $getWorkflowStaticData('global');\nconst before = (staticData.seenUrls || []).length;\nstaticData.seenUrls = [];\nstaticData.seenTimestamps = {};\nconsole.log(`Очищено ${before} URL из истории дедупликации.`);\nreturn [{ json: { cleared: before, message: `Очищено ${before} URL. Теперь можно тестировать воркфлоу заново — все вакансии снова будут видны как новые.` } }];"
+      },
+      "id": "369bd77e-89c0-4c2a-af7b-652d46b8782a",
+      "name": "🧹 Clear Seen URLs (Test Only)",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        288,
+        432
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const staticData = $getWorkflowStaticData('global');\nconst now = Date.now();\nconst maxLockMs = 30 * 60 * 1000; // страховка на случай, если release почему-то не выполнится\n\nif (staticData.lockUntil && staticData.lockUntil > now) {\n  console.log('Предыдущий запуск ещё выполняется — пропускаю этот триггер.');\n  return [];\n}\n\nstaticData.lockUntil = now + maxLockMs;\nreturn [{ json: { _lockAcquired: true } }];\n"
+      },
+      "id": "343dc66b-def1-41cb-bf08-65f1d913b8c5",
+      "name": "🔒 Acquire Lock",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        208,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const staticData = $getWorkflowStaticData('global');\ndelete staticData.lockUntil;\nconsole.log('Лок снят.');\nreturn [{ json: { _released: true } }];\n"
+      },
+      "id": "b6a25e14-c422-4037-9789-ae6d5c39d6c4",
+      "name": "🔓 Release Lock",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2640,
+        240
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// geoId известен только для части стран (проверено вручную через linkedin.com/jobs).\n// Для них шлём числовой geoId — он однозначный и не зависит от текстового резолвинга LinkedIn.\n// Для остальных стран пока остаётся текстовый location (риск коллизии с одноимёнными\n// населёнными пунктами США сохраняется, но фильтр 🌍 Country + Remote Filter всё равно\n// отсеет мусор по итоговой локации вакансии).\nconst countryGeoIds = {\n  Spain: '105646813',\n  Netherlands: '102890719',\n};\n\nconst countries = [\n  'Netherlands','Spain','Armenia'\n// Russia исключена: LinkedIn заблокирован в РФ с 2016, гостевой поиск отдаёт\n// почти сплошной геомусор (левые вакансии из США/UK с фейковым 'Russia' в конце\n// строки локации) вместо реальных местных вакансий — не лечится фильтром,\n// т.к. мусор оканчивается тем же словом, что и настоящие совпадения.\n];\n\n// Гостевой эндпоинт LinkedIn отдаёт максимум ~10 карточек за запрос и требует\n// явной пагинации через start (0, 10, 20...) — раньше запрашивалась только\n// первая страница, из-за чего по каждой стране мы видели лишь первые 10\n// вакансий вообще, до всех фильтров. Берём 3 страницы на страну (0/10/20).\nconst startOffsets = ['0', '10', '20'];\n\nconst out = [];\nfor (const c of countries) {\n  for (const start of startOffsets) {\n    out.push({ json: { country: c, geoId: countryGeoIds[c] || null, start } });\n  }\n}\nreturn out;\n"
+      },
+      "id": "0a2b5e2e-7b20-4be0-a622-54117d30939a",
+      "name": "🌐 LinkedIn Countries",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        512,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "url": "https://www.linkedin.com/jobs-guest/jobs/api/seeMoreJobPostings/search",
+        "sendQuery": true,
+        "specifyQuery": "json",
+        "jsonQuery": "={{ JSON.stringify($json.geoId ? { geoId: $json.geoId, f_WT: '2', start: $json.start } : { location: $json.country, f_WT: '2', start: $json.start }) }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "User-Agent",
+              "value": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+            },
+            {
+              "name": "Accept",
+              "value": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"
+            },
+            {
+              "name": "Accept-Language",
+              "value": "en-US,en;q=0.9"
+            },
+            {
+              "name": "Referer",
+              "value": "=https://www.linkedin.com/jobs/search?location={{ $json.country }}&f_WT=2"
+            }
+          ]
+        },
+        "options": {
+          "batching": {
+            "batch": {
+              "batchSize": 1
+            }
+          },
+          "response": {
+            "response": {
+              "responseFormat": "text"
+            }
+          },
+          "timeout": 20000
+        }
+      },
+      "id": "9dbf6800-e190-40b4-b358-3bdb44415504",
+      "name": "🌍 LinkedIn Jobs",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        736,
+        0
+      ],
+      "continueOnFail": true,
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Разбор HTML-фрагмента гостевого поиска LinkedIn.\n// ВНИМАНИЕ: вёрстка не документирована и может измениться —\n// если после реального прогона парсинг даст 0 вакансий,\n// нужно посмотреть на реальный HTML в поле \"data\" на входе этой ноды\n// и поправить регулярки ниже под актуальную структуру.\n\nconst clean = s => (s || '')\n  .replace(/<[^>]+>/g, ' ')\n  .replace(/&amp;/g, '&')\n  .replace(/&nbsp;/g, ' ')\n  .replace(/&#39;/g, \"'\")\n  .replace(/\\s+/g, ' ')\n  .trim();\n\nconst blockedSignals = /authwall|challenge|captcha|Sign in to LinkedIn/i;\n\nconst results = [];\nconst errors = [];\n\nfor (const item of $input.all()) {\n  const country = item.json.country || 'UNKNOWN';\n  const html = item.json.data || item.json.body || '';\n  const text = typeof html === 'string' ? html : JSON.stringify(html);\n\n  if (!text || text.length < 300) {\n    errors.push({ country, reason: 'Пустой или слишком короткий ответ (возможна блокировка)' });\n    continue;\n  }\n  if (blockedSignals.test(text)) {\n    errors.push({ country, reason: 'Похоже на authwall/капчу — LinkedIn мог заблокировать запрос' });\n    continue;\n  }\n\n  const cardRegex = /<li>\\s*<div class=\"base-card[\\s\\S]*?data-entity-urn=\"urn:li:jobPosting:(\\d+)\"[\\s\\S]*?<\\/div>\\s*<\\/li>/g;\n  let m;\n  let foundInCountry = 0;\n  while ((m = cardRegex.exec(text)) !== null) {\n    const cardHtml = m[0];\n    const jobId = m[1];\n\n    const titleMatch = cardHtml.match(/base-search-card__title[^>]*>([\\s\\S]*?)<\\/h3>/);\n    const companyMatch = cardHtml.match(/base-search-card__subtitle[^>]*>[\\s\\S]*?<a[^>]*>([\\s\\S]*?)<\\/a>/);\n    const locationMatch = cardHtml.match(/job-search-card__location[^>]*>([\\s\\S]*?)<\\/span>/);\n    const urlMatch = cardHtml.match(/href=\"(https:\\/\\/[a-zA-Z0-9-]+\\.linkedin\\.com\\/jobs\\/view\\/[^\"?]+)/);\n    const timeMatch = cardHtml.match(/datetime=\"([^\"]+)\"/);\n\n    const job = {\n      job_id: jobId,\n      title: clean(titleMatch && titleMatch[1]),\n      company: clean(companyMatch && companyMatch[1]),\n      location: clean(locationMatch && locationMatch[1]),\n      url: urlMatch ? urlMatch[1] : '',\n      created: timeMatch ? timeMatch[1] : '',\n      query_country: country,\n      source: 'LinkedIn'\n    };\n\n    if (job.job_id && job.title && job.url) {\n      results.push({ json: job });\n      foundInCountry++;\n    }\n  }\n  console.log(`LinkedIn [${country}]: найдено вакансий — ${foundInCountry}`);\n}\n\nif (errors.length > 0) {\n  console.log('Проблемы по странам:', JSON.stringify(errors));\n}\n\nif (results.length === 0) {\n  return [{ json: { _error: true, _reason: `LinkedIn: 0 вакансий распарсено. Проблемы: ${JSON.stringify(errors.slice(0, 5))}` } }];\n}\n\nreturn results;\n"
+      },
+      "id": "f3e16ff6-27d8-4ebd-9d20-813fd03bfa44",
+      "name": "🧩 Parse LinkedIn HTML",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1072,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const targetCountries = /\\b(Austria|Belgium|Bulgaria|Croatia|Cyprus|Czech(?:ia| Republic)|Denmark|Estonia|Finland|France|Germany|Greece|Hungary|Ireland|Italy|Latvia|Lithuania|Luxembourg|Malta|Netherlands|Poland|Portugal|Romania|Slovakia|Slovenia|Spain|Sweden|Russia|Armenia)$/i;\nconst remoteSignal = /remote/i;\n\nconst out = [];\nfor (const item of $input.all()) {\n  const job = item.json;\n  if (job._error) { out.push(item); continue; }\n\n  const location = (job.location || '').trim();\n  const segments = location.split(',').map(s => s.trim()).filter(Boolean);\n  const lastSegmentRaw = segments[segments.length - 1] || '';\n  // LinkedIn часто пишет формат \"Spain (Remote)\" одним сегментом —\n  // сначала проверяем remote-сигнал по ВСЕЙ строке локации, потом\n  // отрезаем \"(...)\" и сверяем страну по чистому остатку.\n  const lastSegment = lastSegmentRaw.replace(/\\s*\\([^)]*\\)\\s*$/, '').trim();\n\n  const countryOk = targetCountries.test(lastSegment);\n  // Явное слово \"remote\" — либо в заголовке вакансии, либо в самой локации.\n  // Без этой проверки f_WT=2 пропускает и офисные вакансии (проверено на\n  // реальных данных — врач-психиатр без единого упоминания remote).\n  const remoteOk = remoteSignal.test(job.title || '') || remoteSignal.test(location);\n\n  if (countryOk && remoteOk) {\n    job._error = false;\n    out.push(item);\n  }\n}\nreturn out;\n"
+      },
+      "id": "1c326bd1-6dd5-45c3-80a4-0d88c38e0f30",
+      "name": "🌍 Country + Remote Filter",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1296,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 1
+          },
+          "conditions": [
+            {
+              "leftValue": "={{ $json._error }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "equals"
+              },
+              "id": "err-check"
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "150758f2-406e-4fc8-a4d4-e451c48a97ba",
+      "name": "⚠️ Source Error?",
+      "type": "n8n-nodes-base.filter",
+      "typeVersion": 2,
+      "position": [
+        1520,
+        240
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=https://discord.com/api/webhooks/YOUR_WEBHOOK_ID/YOUR_WEBHOOK_TOKEN",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ embeds: [{ title: '⚠️ Ошибка источника', description: $json._reason || 'Неизвестная ошибка при получении вакансий.', color: 15158332 }] }) }}",
+        "options": {
+          "timeout": 20000
+        }
+      },
+      "id": "824a8725-aa00-4079-bcfe-9f9595b5a16f",
+      "name": "🚨 Notify Source Error",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1744,
+        240
+      ],
+      "continueOnFail": true,
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "const allItemsRaw = $input.all();\n\nif (allItemsRaw.length === 1 && allItemsRaw[0].json._error) {\n  return [allItemsRaw[0]];\n}\n\nconst staticData = $getWorkflowStaticData('global');\n\nif (!staticData.seenUrls) staticData.seenUrls = [];\nif (!staticData.seenTimestamps) staticData.seenTimestamps = {};\n\nconst thirtyDaysAgo = Date.now() - (30 * 24 * 60 * 60 * 1000);\nObject.keys(staticData.seenTimestamps).forEach(url => {\n  if (staticData.seenTimestamps[url] < thirtyDaysAgo) {\n    delete staticData.seenTimestamps[url];\n    const idx = staticData.seenUrls.indexOf(url);\n    if (idx > -1) staticData.seenUrls.splice(idx, 1);\n  }\n});\n\nconst newJobs = allItemsRaw.filter(item => {\n  const url = item.json.url;\n  return url && !staticData.seenUrls.includes(url);\n});\n\n// Лог по источникам\nconst bySource = {};\nnewJobs.forEach(item => {\n  const src = item.json.source || 'Unknown';\n  bySource[src] = (bySource[src] || 0) + 1;\n});\nconsole.log(`Total: ${allItemsRaw.length} | New: ${newJobs.length} | Already seen: ${allItemsRaw.length - newJobs.length}`);\nconsole.log('New by source:', JSON.stringify(bySource));\n\nif (newJobs.length === 0) {\n  return [{ json: { _noNewJobs: true } }];\n}\n\nreturn newJobs;"
+      },
+      "id": "6de801fb-5108-4063-9558-efadfffcce69",
+      "name": "🔎 Dedup (Static Data)",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1520,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const real = $input.all().filter(item => !!item.json.url);\n\nif (real.length === 0) {\n  return [{ json: { _noNewJobs: true } }]; // маркер, чтобы дойти до release, даже если новых вакансий нет\n}\n\nreal.forEach(item => { item.json._noNewJobs = false; });\nreturn real;\n"
+      },
+      "id": "9cc9162a-7e46-4a9b-8e4c-89008454f176",
+      "name": "🆕 Has New Jobs?",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1744,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 1
+          },
+          "conditions": [
+            {
+              "leftValue": "={{ $json._noNewJobs }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "equals"
+              },
+              "id": "route-no-new-jobs"
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "04f8fc68-b6bf-4480-88cf-b8bf1ef9aa9a",
+      "name": "🔀 Есть новые вакансии?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        1968,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const staticData = $getWorkflowStaticData('global');\nif (!staticData.seenUrls) staticData.seenUrls = [];\nif (!staticData.seenTimestamps) staticData.seenTimestamps = {};\n\nconst results = [];\nfor (const item of $input.all()) {\n  const job = item.json;\n  if (job.url && !staticData.seenUrls.includes(job.url)) {\n    staticData.seenUrls.push(job.url);\n    staticData.seenTimestamps[job.url] = Date.now();\n  }\n  results.push(item);\n}\nreturn results;\n"
+      },
+      "id": "8ec1d83f-6fbe-4696-bd6d-84245c73e34d",
+      "name": "💾 Save URL",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2192,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const jobs = $input.all().map(item => item.json);\n\n// Лимиты Discord: до 10 embed на сообщение, до ~4096 символов в description одного embed.\n// Берём с запасом, чтобы не упереться в лимит на длинных названиях/локациях.\nconst JOBS_PER_EMBED = 15;\nconst EMBEDS_PER_MESSAGE = 5; // до 75 вакансий на одно Discord-сообщение\n\nfunction jobLine(job) {\n  const title = (job.title || 'Без названия').replace(/[\\[\\]]/g, '');\n  const company = job.company || '—';\n  const location = job.location || '—';\n  return `• [${title}](${job.url}) — ${company}, ${location}`;\n}\n\nconst embeds = [];\nfor (let i = 0; i < jobs.length; i += JOBS_PER_EMBED) {\n  const chunk = jobs.slice(i, i + JOBS_PER_EMBED);\n  const embed = {\n    description: chunk.map(jobLine).join('\\n').substring(0, 4000),\n    color: 5763719\n  };\n  if (i === 0) embed.title = `🆕 Новые вакансии LinkedIn (${jobs.length})`;\n  embeds.push(embed);\n}\nif (embeds.length > 0) {\n  embeds[embeds.length - 1].footer = { text: `LinkedIn (гостевой поиск) • Remote • ${new Date().toLocaleDateString('ru-RU')}` };\n}\n\nconst messages = [];\nfor (let i = 0; i < embeds.length; i += EMBEDS_PER_MESSAGE) {\n  messages.push({ json: { discord_payload: { embeds: embeds.slice(i, i + EMBEDS_PER_MESSAGE) } } });\n}\n\nreturn messages;\n"
+      },
+      "id": "48ff8932-2cbd-43a7-ab00-8bfa51f3cb6d",
+      "name": "📝 Format Discord Embed",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2416,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=https://discord.com/api/webhooks/YOUR_WEBHOOK_ID/YOUR_WEBHOOK_TOKEN",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json.discord_payload) }}",
+        "options": {
+          "batching": {
+            "batch": {
+              "batchSize": 1
+            }
+          },
+          "timeout": 20000
+        }
+      },
+      "id": "351a3d60-10d9-4059-b157-d9139bd532c3",
+      "name": "📨 Send to Discord",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2640,
+        0
+      ],
+      "continueOnFail": true,
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "mode": "combine",
+        "combineBy": "combineByPosition",
+        "options": {}
+      },
+      "id": "3dc34ecf-1851-4c9c-a52d-bb9d80301890",
+      "name": "🔗 Merge Country + Response",
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3,
+      "position": [
+        848,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 1
+          },
+          "conditions": [
+            {
+              "leftValue": "={{ $json._noNewJobs }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "equals"
+              },
+              "id": "route-ai-skip"
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "6542a488-bbd7-45c1-9866-42f08b388372",
+      "name": "🤖 Есть вакансии для AI?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        1744,
+        128
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const staticData = $getWorkflowStaticData('global');\nstaticData.aiKeptJobs = []; // сброс на случай, если прошлый прогон прервался посреди AI-цикла\n\nconst items = $input.all();\nconst CHUNK_SIZE = 15; // с запасом под лимит Groq free-tier (8000 TPM в минуту)\nconst chunks = [];\nfor (let i = 0; i < items.length; i += CHUNK_SIZE) {\n  const slice = items.slice(i, i + CHUNK_SIZE);\n  const jobsForAi = slice.map((it, idx) => ({ id: idx, title: it.json.title, company: it.json.company, location: it.json.location }));\n  chunks.push({ json: { _jobsForAi: jobsForAi, _originalJobs: slice.map(it => it.json) } });\n}\nreturn chunks;\n"
+      },
+      "id": "8b117225-43a4-4bc4-a312-970d24784a45",
+      "name": "🤖 Prep AI Batch",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1968,
+        208
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.groq.com/openai/v1/chat/completions",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "REPLACE_ME"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ model: 'openai/gpt-oss-120b', temperature: 0, messages: [ { role: 'system', content: \"\\u0422\\u044b \\u0444\\u0438\\u043b\\u044c\\u0442\\u0440\\u0443\\u0435\\u0448\\u044c \\u0441\\u043f\\u0438\\u0441\\u043e\\u043a \\u0432\\u0430\\u043a\\u0430\\u043d\\u0441\\u0438\\u0439 \\u0441 LinkedIn \\u0434\\u043b\\u044f \\u0440\\u0435\\u0430\\u043b\\u044c\\u043d\\u043e\\u0433\\u043e \\u043f\\u043e\\u0438\\u0441\\u043a\\u0430 \\u0440\\u0430\\u0431\\u043e\\u0442\\u044b. \\u041d\\u0435\\u043a\\u043e\\u0442\\u043e\\u0440\\u044b\\u0435 \\u0437\\u0430\\u043f\\u0438\\u0441\\u0438 \\u2014 \\u044d\\u0442\\u043e \\u043d\\u0435 \\u043a\\u043e\\u043d\\u043a\\u0440\\u0435\\u0442\\u043d\\u044b\\u0435 \\u043e\\u0442\\u043a\\u0440\\u044b\\u0442\\u044b\\u0435 \\u0432\\u0430\\u043a\\u0430\\u043d\\u0441\\u0438\\u0438, \\u0430 \\u043e\\u0431\\u0449\\u0438\\u0435 \\u043e\\u0431\\u044a\\u044f\\u0432\\u043b\\u0435\\u043d\\u0438\\u044f \\\\\\\"\\u0432\\u0441\\u0442\\u0443\\u043f\\u0438 \\u0432 \\u043a\\u0430\\u0434\\u0440\\u043e\\u0432\\u044b\\u0439 \\u0440\\u0435\\u0437\\u0435\\u0440\\u0432\\\\\\\"/\\\\\\\"\\u043e\\u0441\\u0442\\u0430\\u0432\\u044c \\u0440\\u0435\\u0437\\u044e\\u043c\\u0435 \\u043d\\u0430 \\u0431\\u0443\\u0434\\u0443\\u0449\\u0435\\u0435\\\\\\\" (talent pool, talent community, proactive application, future opportunities, initiativbewerbung, autocandidatura \\u0438 \\u0430\\u043d\\u0430\\u043b\\u043e\\u0433\\u0438 \\u043d\\u0430 \\u043b\\u044e\\u0431\\u043e\\u043c \\u044f\\u0437\\u044b\\u043a\\u0435). \\u0422\\u0435\\u0431\\u0435 \\u0434\\u0430\\u043d JSON-\\u043c\\u0430\\u0441\\u0441\\u0438\\u0432 \\u0432\\u0430\\u043a\\u0430\\u043d\\u0441\\u0438\\u0439 \\u0441 \\u043f\\u043e\\u043b\\u044f\\u043c\\u0438 id, title, company, location. \\u0412\\u0435\\u0440\\u043d\\u0438 \\u0422\\u041e\\u041b\\u042c\\u041a\\u041e JSON-\\u043c\\u0430\\u0441\\u0441\\u0438\\u0432 id \\u0442\\u0435\\u0445 \\u0432\\u0430\\u043a\\u0430\\u043d\\u0441\\u0438\\u0439, \\u043a\\u043e\\u0442\\u043e\\u0440\\u044b\\u0435 \\u044f\\u0432\\u043b\\u044f\\u044e\\u0442\\u0441\\u044f \\u043a\\u043e\\u043d\\u043a\\u0440\\u0435\\u0442\\u043d\\u044b\\u043c\\u0438 \\u043e\\u0442\\u043a\\u0440\\u044b\\u0442\\u044b\\u043c\\u0438 \\u043f\\u043e\\u0437\\u0438\\u0446\\u0438\\u044f\\u043c\\u0438 (\\u043d\\u0435 talent pool), \\u0431\\u0435\\u0437 \\u043f\\u043e\\u044f\\u0441\\u043d\\u0435\\u043d\\u0438\\u0439 \\u0438 \\u0431\\u0435\\u0437 markdown-\\u0440\\u0430\\u0437\\u043c\\u0435\\u0442\\u043a\\u0438.\" }, { role: 'user', content: JSON.stringify($json._jobsForAi) } ] }) }}",
+        "options": {
+          "timeout": 30000
+        }
+      },
+      "id": "a47a06a6-dda2-492d-a46d-26dc61a3124d",
+      "name": "🤖 AI Filter (Groq)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2192,
+        208
+      ],
+      "continueOnFail": true,
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "options": {}
+      },
+      "id": "7cd7f398-2c53-41b0-948a-3a0c47d0e795",
+      "name": "🔁 AI Rate Limiter",
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 3,
+      "position": [
+        2192,
+        320
+      ]
+    },
+    {
+      "parameters": {
+        "amount": 20
+      },
+      "id": "07c6be30-9bcf-414b-a90a-bd4744e81b62",
+      "name": "⏳ Wait Between AI Calls",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [
+        2640,
+        368
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const resp = $json;\nconst originalJobs = $('🔁 AI Rate Limiter').item.json._originalJobs || [];\n\nlet keepIds = null;\nif (!resp.error) {\n  try {\n    const raw = (resp.choices && resp.choices[0] && resp.choices[0].message && resp.choices[0].message.content) || '';\n    const cleaned = raw.replace(/```json|```/g, '').trim();\n    keepIds = JSON.parse(cleaned);\n  } catch (e) {\n    keepIds = null;\n  }\n}\n\nlet kept;\nif (Array.isArray(keepIds)) {\n  const keepSet = new Set(keepIds.map(String));\n  kept = originalJobs.filter((job, idx) => keepSet.has(String(idx)));\n} else {\n  kept = originalJobs; // сбой/непонятный ответ по этому чанку — не фильтруем (fail open)\n}\n\nconst staticData = $getWorkflowStaticData('global');\nif (!Array.isArray(staticData.aiKeptJobs)) staticData.aiKeptJobs = [];\nstaticData.aiKeptJobs.push(...kept);\n\nreturn [{ json: { chunkProcessed: true } }];\n"
+      },
+      "id": "23bbcf0e-2b64-4277-ad40-741db7425f1e",
+      "name": "🤖 Merge AI Chunk Result",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2416,
+        320
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const staticData = $getWorkflowStaticData('global');\nconst kept = Array.isArray(staticData.aiKeptJobs) ? staticData.aiKeptJobs : [];\nstaticData.aiKeptJobs = []; // сброс для следующего прогона\n\nif (kept.length === 0) {\n  return [{ json: { _noNewJobs: true } }];\n}\nreturn kept.map(job => ({ json: { ...job, _noNewJobs: false } }));\n"
+      },
+      "id": "52324f5a-abb5-42c7-bc8f-a94ed2c2d865",
+      "name": "🤖 Finalize AI Filter",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2192,
+        480
+      ]
+    }
+  ],
+  "connections": {
+    "⏰ Every Day": {
+      "main": [
+        [
+          {
+            "node": "🔒 Acquire Lock",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "🧪 Manual Trigger (Test Reset)": {
+      "main": [
+        [
+          {
+            "node": "🧹 Clear Seen URLs (Test Only)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "🧹 Clear Seen URLs (Test Only)": {
+      "main": [
+        [
+          {
+            "node": "🌐 LinkedIn Countries",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "🔒 Acquire Lock": {
+      "main": [
+        [
+          {
+            "node": "🌐 LinkedIn Countries",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "🌐 LinkedIn Countries": {
+      "main": [
+        [
+          {
+            "node": "🌍 LinkedIn Jobs",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "🔗 Merge Country + Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "🌍 LinkedIn Jobs": {
+      "main": [
+        [
+          {
+            "node": "🔗 Merge Country + Response",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "🧩 Parse LinkedIn HTML": {
+      "main": [
+        [
+          {
+            "node": "🌍 Country + Remote Filter",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "🌍 Country + Remote Filter": {
+      "main": [
+        [
+          {
+            "node": "⚠️ Source Error?",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "🔎 Dedup (Static Data)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "⚠️ Source Error?": {
+      "main": [
+        [
+          {
+            "node": "🚨 Notify Source Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "🚨 Notify Source Error": {
+      "main": [
+        [
+          {
+            "node": "🔓 Release Lock",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "🔎 Dedup (Static Data)": {
+      "main": [
+        [
+          {
+            "node": "🆕 Has New Jobs?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "🆕 Has New Jobs?": {
+      "main": [
+        [
+          {
+            "node": "🤖 Есть вакансии для AI?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "🔀 Есть новые вакансии?": {
+      "main": [
+        [
+          {
+            "node": "🔓 Release Lock",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "💾 Save URL",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "💾 Save URL": {
+      "main": [
+        [
+          {
+            "node": "📝 Format Discord Embed",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "📝 Format Discord Embed": {
+      "main": [
+        [
+          {
+            "node": "📨 Send to Discord",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "📨 Send to Discord": {
+      "main": [
+        [
+          {
+            "node": "🔓 Release Lock",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "🔗 Merge Country + Response": {
+      "main": [
+        [
+          {
+            "node": "🧩 Parse LinkedIn HTML",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "🤖 Есть вакансии для AI?": {
+      "main": [
+        [
+          {
+            "node": "🔀 Есть новые вакансии?",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "🤖 Prep AI Batch",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "🤖 Prep AI Batch": {
+      "main": [
+        [
+          {
+            "node": "🔁 AI Rate Limiter",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "🤖 AI Filter (Groq)": {
+      "main": [
+        [
+          {
+            "node": "🤖 Merge AI Chunk Result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "🔁 AI Rate Limiter": {
+      "main": [
+        [
+          {
+            "node": "🤖 Finalize AI Filter",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "🤖 AI Filter (Groq)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "⏳ Wait Between AI Calls": {
+      "main": [
+        [
+          {
+            "node": "🔁 AI Rate Limiter",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "🤖 Merge AI Chunk Result": {
+      "main": [
+        [
+          {
+            "node": "⏳ Wait Between AI Calls",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "🤖 Finalize AI Filter": {
+      "main": [
+        [
+          {
+            "node": "🔀 Есть новые вакансии?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate"
+  },
+  "versionCounter": 103,
+  "versionMetadata": {
+    "name": null,
+    "description": null
+  }
+}
